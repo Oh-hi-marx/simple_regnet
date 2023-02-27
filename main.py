@@ -38,7 +38,7 @@ class qualityFace(Dataset):
        return img, torch.FloatTensor(label)
 
 if __name__ == "__main__":
-    #wandb.init(project="utkface-regnet-combined")
+    wandb.init(project="utkface-regnet-combined")
     imgs = glob.glob("ffhq/*")
     epochs = 100
     device = 'cuda'
@@ -58,9 +58,10 @@ if __name__ == "__main__":
 
     ])
 
-    dataset = qualityFace(imgs, transform)
+    dataset = qualityFace(imgs[:-10], transform)
     dataloader = DataLoader(dataset, batch_size = 100, num_workers = 5)
-
+    testdataset = qualityFace(imgs[-10:], transform)
+    testloader = DataLoader(testdataset, batch_size = 100, num_workers = 5)
 
     model = models.regnet_y_400mf(weights = "IMAGENET1K_V2")
     num_ftrs = model.fc.in_features
@@ -71,7 +72,11 @@ if __name__ == "__main__":
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    os.makedirs('checkpoints', exist_ok=True)
+
+    step = 0
     for epoch in range(epochs):
+
         for batchi, (inputs, labels) in enumerate(dataloader):
             #visulise(inputs, batchi)
             inputs, labels = inputs.to(device), labels.to(device)
@@ -83,3 +88,27 @@ if __name__ == "__main__":
             # update the gradients
 
             optimizer.step()
+
+            if(step%100==0):
+                wandb.log({ 'train loss': loss}, step = step)
+            step+= 1
+
+        ############ TEST ###############
+        with torch.no_grad():
+            loss =0;correct = 0;total = 0
+
+            for inputs, labels in testloader:
+                inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+                outputs = model(inputs)
+                total += labels.size(0)
+                loss += criterion(outputs, labels)
+                correct += torch.sum(torch.abs(outputs.data - labels.data) <0.5)
+            accuracy = (   100 * correct / (total*numClass))
+            print('Accuracy of the network on test images: %0.3f %%' % accuracy)
+            wandb.log({'test accuracy': accuracy, 'epoch': epoch, 'test loss': loss})
+
+
+        torch.save({'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict()},
+            'checkpoints' + os.sep + str(epoch)+'_'+ str(round(accuracy.item(),2)) + '.pth')
